@@ -9,8 +9,8 @@ import pandas as pd
 # ----------------------
 st.set_page_config(page_title="Pitcher ER Simulator", layout="wide")
 
-# ----------------------
-# Custom Background & Logo
+# ---------------------- 
+# Custom Background 
 # ----------------------
 st.markdown("""
     <style>
@@ -20,14 +20,9 @@ st.markdown("""
         background-repeat: no-repeat;
         background-attachment: fixed;
     }
-    #logo {
-        display: flex;
-        justify-content: center;
-        margin-top: 10px;
-        margin-bottom: 20px;
-    }
     </style>
 """, unsafe_allow_html=True)
+
 
 st.markdown('<div id="logo"><img src="images/logo.png" width="160"></div>', unsafe_allow_html=True)
 
