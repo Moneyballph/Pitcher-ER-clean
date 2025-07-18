@@ -140,11 +140,13 @@ true_ev_percent = round(true_ev * 100, 2)
 
     # Player Result Board
     st.subheader("🧾 Player Board")
+
     df = pd.DataFrame({
-        "Pitcher": [pitcher_name],
-        "True Probability": [f"{true_prob*100:.1f}%"],
-        "Implied Probability": [f"{implied_prob*100:.1f}%"],
-        "EV %": [f"{ev:.1f}%"],
-        "Tier": [tier.replace("🟢 ", "").replace("🟡 ", "").replace("🟠 ", "").replace("🔴 ", "")]
-    })
-    st.dataframe(df, use_container_width=True)
+    "Pitcher": [pitcher_name],
+    "True Probability": [f"{true_prob*100:.1f}%"],
+    "Implied Probability": [f"{implied_prob*100:.1f}%"],
+    "EV %": [f"{ev:.1f}%"],
+    "True EV %": [f"{true_ev_percent:.1f}%"],
+    "Tier": [tier.replace("🟢 ", "").replace("🟡 ", "").replace("🟠 ", "").replace("🔴 ", "")]
+})
+
