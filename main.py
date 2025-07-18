@@ -132,6 +132,8 @@ true_ev_percent = round(true_ev * 100, 2)
     st.markdown(f"**True Probability of Under 2.5 ER:** {true_prob*100}%")
     st.markdown(f"**Implied Probability (from Odds):** {implied_prob*100}%")
     st.markdown(f"**Expected Value (EV%):** {ev}%")
+    st.markdown(f"**True Expected Value (ROI per $1):** {true_ev_percent}%")
+
     st.markdown(f"**Difficulty Tier:** {tier}")
     if warning_msg:
         st.warning(warning_msg)
