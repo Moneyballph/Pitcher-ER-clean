@@ -99,30 +99,28 @@ if simulate_button:
     else:
         implied_prob = round(100 / (under_odds + 100), 4)
 
-   # Relative EV (existing logic)
-ev = round((true_prob - implied_prob) / implied_prob * 100, 2)
+    # EV % (relative)
+    ev = round((true_prob - implied_prob) / implied_prob * 100, 2)
 
-# True EV (real expected return)
-if under_odds < 0:
-    payout = 100 / abs(under_odds)
-else:
-    payout = under_odds / 100
+    # True EV % (real ROI)
+    if under_odds < 0:
+        payout = 100 / abs(under_odds)
+    else:
+        payout = under_odds / 100
+    true_ev = round((true_prob * payout) - ((1 - true_prob) * 1), 4)
+    true_ev_percent = round(true_ev * 100, 2)
 
-true_ev = round((true_prob * payout) - ((1 - true_prob) * 1), 4)
-true_ev_percent = round(true_ev * 100, 2)
+    # Tier logic
+    if true_prob >= 0.80:
+        tier = "🟢 Elite"
+    elif true_prob >= 0.70:
+        tier = "🟡 Strong"
+    elif true_prob >= 0.60:
+        tier = "🟠 Moderate"
+    else:
+        tier = "🔴 Risky"
 
-# Difficulty Tier
-if true_prob >= 0.80:
-    tier = "🟢 Elite"
-elif true_prob >= 0.70:
-    tier = "🟡 Strong"
-elif true_prob >= 0.60:
-    tier = "🟠 Moderate"
-else:
-    tier = "🔴 Risky"
-
-
-    # Warning logic for WHIP
+    # WHIP Warning
     warning_msg = ""
     if whip > 1.45 and era < 3.20 and xera == 0:
         warning_msg = "⚠️ ERA may be misleading due to high WHIP. Consider using xERA or reducing confidence."
@@ -136,20 +134,19 @@ else:
     st.markdown(f"**Implied Probability (from Odds):** {implied_prob*100}%")
     st.markdown(f"**Expected Value (EV%):** {ev}%")
     st.markdown(f"**True Expected Value (ROI per $1):** {true_ev_percent}%")
-
     st.markdown(f"**Difficulty Tier:** {tier}")
     if warning_msg:
         st.warning(warning_msg)
 
     # Player Result Board
     st.subheader("🧾 Player Board")
-
     df = pd.DataFrame({
-    "Pitcher": [pitcher_name],
-    "True Probability": [f"{true_prob*100:.1f}%"],
-    "Implied Probability": [f"{implied_prob*100:.1f}%"],
-    "EV %": [f"{ev:.1f}%"],
-    "True EV %": [f"{true_ev_percent:.1f}%"],
-    "Tier": [tier.replace("🟢 ", "").replace("🟡 ", "").replace("🟠 ", "").replace("🔴 ", "")]
-})
+        "Pitcher": [pitcher_name],
+        "True Probability": [f"{true_prob*100:.1f}%"],
+        "Implied Probability": [f"{implied_prob*100:.1f}%"],
+        "EV %": [f"{ev:.1f}%"],
+        "True EV %": [f"{true_ev_percent:.1f}%"],
+        "Tier": [tier.replace("🟢 ", "").replace("🟡 ", "").replace("🟠 ", "").replace("🔴 ", "")]
+    })
+    st.dataframe(df, use_container_width=True)
 
