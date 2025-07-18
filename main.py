@@ -4,19 +4,21 @@ import math
 from scipy.stats import poisson
 import pandas as pd
 
-# ---------------------- 
-# Custom Background 
+# ----------------------
+# Set custom background
 # ----------------------
 st.markdown("""
     <style>
     .stApp {
-        background-image: url("images/background.jpg");
+        background-image: url("images/stadium_background.jpg");
         background-size: cover;
         background-repeat: no-repeat;
         background-attachment: fixed;
+        background-position: center;
     }
     </style>
 """, unsafe_allow_html=True)
+
 
 
 
