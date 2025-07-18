@@ -4,24 +4,29 @@ import math
 from scipy.stats import poisson
 import pandas as pd
 
-# ----------------------
-# Set page config
-# ----------------------
-st.set_page_config(page_title="Pitcher ER Simulator", layout="wide")
+import base64
 
-# ---------------------- 
-# Custom Background 
-# ----------------------
-st.markdown("""
-    <style>
-    .stApp {
-        background-image: url("images/background.jpg");
-        background-size: cover;
-        background-repeat: no-repeat;
-        background-attachment: fixed;
-    }
-    </style>
-""", unsafe_allow_html=True)
+def set_background(image_file):
+    with open(image_file, "rb") as img:
+        encoded_string = base64.b64encode(img.read()).decode()
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-image: url("data:image/jpg;base64,{encoded_string}");
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+            background-position: center;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+# ✅ Call this function with the image you uploaded
+set_background("images/background.jpg")
+
 
 
 st.markdown('<div id="logo"><img src="images/logo.png" width="160"></div>', unsafe_allow_html=True)
