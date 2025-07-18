@@ -99,8 +99,10 @@ if simulate_button:
     else:
         implied_prob = round(100 / (under_odds + 100), 4)
 
-    ev = round((true_prob - implied_prob) / implied_prob * 100, 2)
-    # Calculate payout multiplier for True EV (monetary return)
+   # Relative EV (existing logic)
+ev = round((true_prob - implied_prob) / implied_prob * 100, 2)
+
+# True EV (real expected return)
 if under_odds < 0:
     payout = 100 / abs(under_odds)
 else:
@@ -109,16 +111,16 @@ else:
 true_ev = round((true_prob * payout) - ((1 - true_prob) * 1), 4)
 true_ev_percent = round(true_ev * 100, 2)
 
+# Difficulty Tier
+if true_prob >= 0.80:
+    tier = "🟢 Elite"
+elif true_prob >= 0.70:
+    tier = "🟡 Strong"
+elif true_prob >= 0.60:
+    tier = "🟠 Moderate"
+else:
+    tier = "🔴 Risky"
 
-    # Difficulty Tier
-    if true_prob >= 0.80:
-        tier = "🟢 Elite"
-    elif true_prob >= 0.70:
-        tier = "🟡 Strong"
-    elif true_prob >= 0.60:
-        tier = "🟠 Moderate"
-    else:
-        tier = "🔴 Risky"
 
     # Warning logic for WHIP
     warning_msg = ""
