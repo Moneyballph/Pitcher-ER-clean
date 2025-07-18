@@ -100,6 +100,14 @@ if simulate_button:
         implied_prob = round(100 / (under_odds + 100), 4)
 
     ev = round((true_prob - implied_prob) / implied_prob * 100, 2)
+    # Calculate payout multiplier for True EV (monetary return)
+    if under_odds < 0:
+    payout = 100 / abs(under_odds)
+    else:
+    payout = under_odds / 100
+
+true_ev = round((true_prob * payout) - ((1 - true_prob) * 1), 4)
+true_ev_percent = round(true_ev * 100, 2)
 
     # Difficulty Tier
     if true_prob >= 0.80:
