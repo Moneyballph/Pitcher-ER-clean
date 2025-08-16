@@ -85,6 +85,19 @@ def k_over_under_probs(line_ks, n_bf, pK):
     p_over  = 1.0 - binom_cdf(n_bf, k_over-1, pK)
     return p_over, p_under
 
+# ---- EV helpers ----
+def leg_true_ev_pct(odds_american: float, true_prob: float) -> float:
+    payout = 100.0/abs(odds_american) if odds_american < 0 else odds_american/100.0
+    return (true_prob * payout - (1 - true_prob)) * 100.0
+
+def parlay_tier(true_ev_pct: float, legs: list) -> str:
+    # Tier on parlay True EV %, but require all legs to be +EV for Elite/Strong
+    all_pos = all(leg_true_ev_pct(leg["Odds"], leg["True Prob"]) > 0 for leg in legs)
+    if true_ev_pct >= 10.0 and all_pos: return "🟢 Elite"
+    if true_ev_pct >= 5.0  and all_pos: return "🟡 Strong"
+    if true_ev_pct >= 0.0: return "🟠 Moderate"
+    return "🔴 Risky"
+
 # =========================================================
 #                   PARLAY BUILDER LOGIC
 # =========================================================
@@ -155,7 +168,7 @@ with tabs[0]:
         ballpark = st.selectbox("Ballpark Factor", ["Neutral", "Pitcher-Friendly", "Hitter-Friendly"])
         under_odds = st.number_input("Sportsbook Odds (U2.5 ER)", value=-115)
         if st.button("▶ Simulate Player", key="simulate_er"):
-            # compute & SAVE to state (no add buttons here)
+            # compute & SAVE to state
             try:
                 ip_values = [float(i.strip()) for i in last_3_ip.split(",") if i.strip() != ""]
                 trend_ip = sum(ip_values) / len(ip_values)
@@ -213,7 +226,7 @@ with tabs[0]:
         st.markdown(f"**True Probability of Under 2.5 ER:** {er['true_prob']*100:.2f}%")
         st.markdown(f"**Implied Probability (from Odds):** {er['implied_prob']*100:.2f}%")
         st.markdown(f"**Expected Value (EV%):** {er['ev']:.2f}%")
-        st.markdown(f"**True Expected Value (ROI per $1):** {er['true_ev_percent']:.2f}%")
+        st.markdown(f"**True EV % (ROI per $1):** {er['true_ev_percent']:.2f}%")
         st.markdown(f"**Difficulty Tier:** {er['tier']}")
         if er["warning"]: st.warning(er["warning"])
 
@@ -367,7 +380,7 @@ with tabs[1]:
                 st.success("Added to Parlay.")
 
 # =========================================================
-#               TAB 3: PARLAY BUILDER
+#               TAB 3: PARLAY BUILDER (with Tier)
 # =========================================================
 with tabs[2]:
     st.subheader("🧩 Parlay Builder")
@@ -398,6 +411,8 @@ with tabs[2]:
     if st.session_state.parlay_legs:
         summary = parlay_summary(st.session_state.parlay_legs)
         if summary:
+            tier = parlay_tier(summary["True EV %"], st.session_state.parlay_legs)
+
             st.markdown("---")
             st.markdown("### 📈 Parlay Summary")
             st.write(f"**Combined American Odds:** {summary['American Odds']}")
@@ -406,10 +421,10 @@ with tabs[2]:
             st.write(f"**Implied Parlay %:** {summary['Implied %']:.2f}%")
             st.write(f"**Edge (pp):** {summary['Edge (pp)']:.2f}")
             st.write(f"**True EV % (ROI per $1):** {summary['True EV %']:.2f}%")
+            st.write(f"**Parlay Tier:** {tier}")
 
             st.markdown("#### Copy-ready Tracker Row")
             legs_text = " + ".join([leg["Description"] for leg in st.session_state.parlay_legs])
-            tracker_row = f"{legs_text}\t{summary['American Odds']}\t{summary['True %']:.2f}%\t{summary['Implied %']:.2f}%\t{summary['Edge (pp)']:.2f}\t{summary['True EV %']:.2f}%"
+            tracker_row = f"{legs_text}\t{summary['American Odds']}\t{summary['True %']:.2f}%\t{summary['Implied %']:.2f}%\t{summary['Edge (pp)']:.2f}\t{summary['True EV %']:.2f}%\t{tier}"
             st.code(tracker_row, language="text")
-
 
