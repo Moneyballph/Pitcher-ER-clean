@@ -23,9 +23,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.markdown('<div id="logo"><img src="images/logo.png" width="160"></div>', unsafe_allow_html=True)
 
-# Session state for parlay legs
+# Session state
 if "parlay_legs" not in st.session_state:
     st.session_state.parlay_legs = []
+if "er_result" not in st.session_state:
+    st.session_state.er_result = None
+if "k_result" not in st.session_state:
+    st.session_state.k_result = None
 
 # =========================================================
 #                       HELPERS
@@ -131,7 +135,7 @@ st.title("🎯 Pitcher Earned Runs & Strikeouts Simulator")
 tabs = st.tabs(["Earned Runs (U2.5)", "Strikeouts (K)", "Parlay Builder"])
 
 # =========================================================
-#               TAB 1: EARNED RUNS (UNCHANGED)
+#               TAB 1: EARNED RUNS (persist results)
 # =========================================================
 with tabs[0]:
     st.subheader("Input Stats")
@@ -150,78 +154,86 @@ with tabs[0]:
         league_avg_ops = st.number_input("League Average OPS", value=0.715, step=0.001)
         ballpark = st.selectbox("Ballpark Factor", ["Neutral", "Pitcher-Friendly", "Hitter-Friendly"])
         under_odds = st.number_input("Sportsbook Odds (U2.5 ER)", value=-115)
-        simulate_button = st.button("▶ Simulate Player", key="simulate_er")
+        if st.button("▶ Simulate Player", key="simulate_er"):
+            # compute & SAVE to state (no add buttons here)
+            try:
+                ip_values = [float(i.strip()) for i in last_3_ip.split(",") if i.strip() != ""]
+                trend_ip = sum(ip_values) / len(ip_values)
+            except:
+                st.error("⚠️ Please enter 3 valid IP values separated by commas (e.g. 5.2,6.1,5.0)")
+                st.stop()
 
-    if simulate_button:
-        try:
-            ip_values = [float(i.strip()) for i in last_3_ip.split(",") if i.strip() != ""]
-            trend_ip = sum(ip_values) / len(ip_values)
-        except:
-            st.error("⚠️ Please enter 3 valid IP values separated by commas (e.g. 5.2,6.1,5.0)")
-            st.stop()
+            base_ip = total_ip / games_started
+            park_adj = 0.2 if ballpark=="Pitcher-Friendly" else (-0.2 if ballpark=="Hitter-Friendly" else 0.0)
+            expected_ip = round(((base_ip + trend_ip) / 2) + park_adj, 2)
 
-        base_ip = total_ip / games_started
+            used_era = xera if xera > 0 else era
+            adjusted_era = round(used_era * (opponent_ops / league_avg_ops), 3)
+            lambda_er = round(adjusted_era * (expected_ip / 9), 3)
 
-        park_adj = 0.0
-        if ballpark == "Pitcher-Friendly": park_adj = 0.2
-        elif ballpark == "Hitter-Friendly": park_adj = -0.2
+            p0 = poisson.pmf(0, lambda_er); p1 = poisson.pmf(1, lambda_er); p2 = poisson.pmf(2, lambda_er)
+            true_prob = round(p0 + p1 + p2, 4)
 
-        expected_ip = round(((base_ip + trend_ip) / 2) + park_adj, 2)
+            implied_prob = american_to_prob(under_odds)
+            ev = round((true_prob - implied_prob) / max(implied_prob,1e-9) * 100, 2)
 
-        used_era = xera if xera > 0 else era
-        adjusted_era = round(used_era * (opponent_ops / league_avg_ops), 3)
-        lambda_er = round(adjusted_era * (expected_ip / 9), 3)
+            payout = 100/abs(under_odds) if under_odds < 0 else under_odds/100
+            true_ev_percent = round(((true_prob * payout) - (1 - true_prob)) * 100, 2)
 
-        p0 = poisson.pmf(0, lambda_er)
-        p1 = poisson.pmf(1, lambda_er)
-        p2 = poisson.pmf(2, lambda_er)
-        true_prob = round(p0 + p1 + p2, 4)
+            if true_prob >= 0.80: tier = "🟢 Elite"
+            elif true_prob >= 0.70: tier = "🟡 Strong"
+            elif true_prob >= 0.60: tier = "🟠 Moderate"
+            else: tier = "🔴 Risky"
 
-        implied_prob = round(abs(under_odds) / (abs(under_odds) + 100), 4) if under_odds < 0 else round(100 / (under_odds + 100), 4)
+            warning_msg = ""
+            if whip > 1.45 and era < 3.20 and xera == 0:
+                warning_msg = "⚠️ ERA may be misleading due to high WHIP. Consider using xERA or reducing confidence."
 
-        ev = round((true_prob - implied_prob) / implied_prob * 100, 2)
+            st.session_state.er_result = {
+                "pitcher": pitcher_name or "Pitcher",
+                "expected_ip": expected_ip,
+                "adjusted_era": adjusted_era,
+                "lambda_er": lambda_er,
+                "true_prob": true_prob,
+                "implied_prob": implied_prob,
+                "ev": ev,
+                "true_ev_percent": true_ev_percent,
+                "tier": tier,
+                "warning": warning_msg,
+                "odds": float(under_odds)
+            }
 
-        payout = 100 / abs(under_odds) if under_odds < 0 else under_odds / 100
-        true_ev = round((true_prob * payout) - ((1 - true_prob) ) , 4)
-        true_ev_percent = round(true_ev * 100, 2)
-
-        if true_prob >= 0.80: tier = "🟢 Elite"
-        elif true_prob >= 0.70: tier = "🟡 Strong"
-        elif true_prob >= 0.60: tier = "🟠 Moderate"
-        else: tier = "🔴 Risky"
-
-        warning_msg = ""
-        if whip > 1.45 and era < 3.20 and xera == 0:
-            warning_msg = "⚠️ ERA may be misleading due to high WHIP. Consider using xERA or reducing confidence."
-
+    # ----- Always show the latest ER results (if any) -----
+    er = st.session_state.er_result
+    if er:
         st.subheader("📊 Simulation Results")
-        st.markdown(f"**Expected IP:** {expected_ip} innings")
-        st.markdown(f"**Adjusted ERA vs Opponent:** {adjusted_era}")
-        st.markdown(f"**Expected ER (λ):** {lambda_er}")
-        st.markdown(f"**True Probability of Under 2.5 ER:** {true_prob*100}%")
-        st.markdown(f"**Implied Probability (from Odds):** {implied_prob*100}%")
-        st.markdown(f"**Expected Value (EV%):** {ev}%")
-        st.markdown(f"**True Expected Value (ROI per $1):** {true_ev_percent}%")
-        st.markdown(f"**Difficulty Tier:** {tier}")
-        if warning_msg: st.warning(warning_msg)
+        st.markdown(f"**Expected IP:** {er['expected_ip']} innings")
+        st.markdown(f"**Adjusted ERA vs Opponent:** {er['adjusted_era']}")
+        st.markdown(f"**Expected ER (λ):** {er['lambda_er']}")
+        st.markdown(f"**True Probability of Under 2.5 ER:** {er['true_prob']*100:.2f}%")
+        st.markdown(f"**Implied Probability (from Odds):** {er['implied_prob']*100:.2f}%")
+        st.markdown(f"**Expected Value (EV%):** {er['ev']:.2f}%")
+        st.markdown(f"**True Expected Value (ROI per $1):** {er['true_ev_percent']:.2f}%")
+        st.markdown(f"**Difficulty Tier:** {er['tier']}")
+        if er["warning"]: st.warning(er["warning"])
 
         st.subheader("🧾 Player Board")
         df = pd.DataFrame({
-            "Pitcher": [pitcher_name],
-            "True Probability": [f"{true_prob*100:.1f}%"],
-            "Implied Probability": [f"{implied_prob*100:.1f}%"],
-            "EV %": [f"{ev:.1f}%"],
-            "True EV %": [f"{true_ev_percent:.1f}%"],
-            "Tier": [tier.replace("🟢 ","").replace("🟡 ","").replace("🟠 ","").replace("🔴 ","")]
+            "Pitcher": [er["pitcher"]],
+            "True Probability": [f"{er['true_prob']*100:.1f}%"],
+            "Implied Probability": [f"{er['implied_prob']*100:.1f}%"],
+            "EV %": [f"{er['ev']:.1f}%"],
+            "True EV %": [f"{er['true_ev_percent']:.1f}%"],
+            "Tier": [er["tier"].split()[-1]]
         })
         st.dataframe(df, use_container_width=True)
 
         if st.button("➕ Add to Parlay: Under 2.5 ER", key="add_er"):
-            add_leg_to_parlay("ER", f"{pitcher_name or 'Pitcher'} U2.5 ER", "Under", "2.5", float(under_odds), float(true_prob))
+            add_leg_to_parlay("ER", f"{er['pitcher']} U2.5 ER", "Under", "2.5", er["odds"], er["true_prob"])
             st.success("Added to Parlay.")
 
 # =========================================================
-#               TAB 2: STRIKEOUTS (K) — EV% + Suggestion
+#        TAB 2: STRIKEOUTS (persist results + EV + pick)
 # =========================================================
 with tabs[1]:
     st.subheader("Strikeouts (K)")
@@ -245,7 +257,7 @@ with tabs[1]:
             recent_factor= st.number_input("Recent Form Factor", value=1.00, min_value=0.90, max_value=1.10, step=0.01, format="%.2f")
 
     if st.button("▶ Calculate Strikeouts"):
-        # Auto-calc Expected IP
+        # compute & SAVE to state
         try:
             ip_values_k = [float(i.strip()) for i in last_3_ip_k.split(",") if i.strip() != ""]
             trend_ip_k = sum(ip_values_k) / len(ip_values_k)
@@ -260,7 +272,6 @@ with tabs[1]:
         base_ip_k = total_ip_k / games_started_k
         expected_ip_k = round(((base_ip_k + trend_ip_k) / 2), 2)
 
-        # Parse odds
         try:
             odds_over_f  = float(odds_over)
             odds_under_f = float(odds_under)
@@ -268,34 +279,25 @@ with tabs[1]:
             st.error("Please enter valid American odds (e.g., -115 or +120).")
             st.stop()
 
-        # --- Model ---
         pK   = estimate_pK(pitcher_k_pct, opp_k_vs_hand, park_factor, ump_factor, recent_factor)
-        n_bf = expected_bf(expected_ip_k)  # uses fixed PA_PER_INNING = 4.3
+        n_bf = expected_bf(expected_ip_k)
         p_over, p_under = k_over_under_probs(k_line, n_bf, pK)
-
-        # Expected Ks (mean of binomial)
         expected_ks = n_bf * pK
 
-        # Implied probabilities from odds
         imp_over  = american_to_prob(odds_over_f)
         imp_under = american_to_prob(odds_under_f)
 
-        # ---- EV CALCS ----
-        # Relative EV%
-        ev_over  = ((p_over  - imp_over ) / imp_over ) * 100.0
-        ev_under = ((p_under - imp_under) / imp_under) * 100.0
+        ev_over  = ((p_over  - imp_over ) / max(imp_over,1e-9)) * 100.0
+        ev_under = ((p_under - imp_under) / max(imp_under,1e-9)) * 100.0
 
-        # True EV % (ROI per $1)
         payout_over  = 100.0/abs(odds_over_f)  if odds_over_f  < 0 else odds_over_f/100.0
         payout_under = 100.0/abs(odds_under_f) if odds_under_f < 0 else odds_under_f/100.0
         true_ev_over_pct  = ((p_over  * payout_over)  - (1 - p_over )) * 100.0
         true_ev_under_pct = ((p_under * payout_under) - (1 - p_under)) * 100.0
 
-        # Tiers
         over_tier  = tier_from_true_prob(p_over)
         under_tier = tier_from_true_prob(p_under)
 
-        # Suggested side by True EV %
         if true_ev_over_pct > true_ev_under_pct:
             suggested_side = "Over"
             suggested_ev = true_ev_over_pct
@@ -307,42 +309,61 @@ with tabs[1]:
             suggested_prob = p_under * 100.0
             suggested_imp = imp_under * 100.0
 
-        # --- Output ---
+        st.session_state.k_result = {
+            "pitcher": k_pitcher or "Pitcher",
+            "expected_ip": expected_ip_k,
+            "n_bf": n_bf,
+            "pK": pK,
+            "expected_ks": expected_ks,
+            "k_line": k_line,
+            "p_over": p_over, "p_under": p_under,
+            "imp_over": imp_over, "imp_under": imp_under,
+            "ev_over": ev_over, "ev_under": ev_under,
+            "true_ev_over_pct": true_ev_over_pct, "true_ev_under_pct": true_ev_under_pct,
+            "over_tier": over_tier, "under_tier": under_tier,
+            "odds_over": odds_over_f, "odds_under": odds_under_f,
+            "suggested_side": suggested_side, "suggested_ev": suggested_ev,
+            "suggested_prob": suggested_prob, "suggested_imp": suggested_imp
+        }
+
+    # ----- Always show latest K results (if any) -----
+    kr = st.session_state.k_result
+    if kr:
         st.markdown("---")
-        st.markdown(f"### {k_pitcher or 'Pitcher'} — K Line {k_line}")
-        st.write(f"**Expected IP (auto):** {expected_ip_k} innings (avg of season GS-IP and last 3 starts)")
-        st.write(f"**Estimated Batters Faced (BF):** {n_bf}  (using PA/IP = {PA_PER_INNING})")
-        st.write(f"**Per-PA Strikeout Probability (pK):** {pK:.3f}")
-        st.write(f"**Expected Strikeouts (mean Ks):** {expected_ks:.2f}")
+        st.markdown(f"### {kr['pitcher']} — K Line {kr['k_line']}")
+        st.write(f"**Expected IP (auto):** {kr['expected_ip']} innings (avg of season GS-IP and last 3 starts)")
+        st.write(f"**Estimated Batters Faced (BF):** {kr['n_bf']}  (using PA/IP = {PA_PER_INNING})")
+        st.write(f"**Per-PA Strikeout Probability (pK):** {kr['pK']:.3f}")
+        st.write(f"**Expected Strikeouts (mean Ks):** {kr['expected_ks']:.2f}")
 
         st.markdown("---")
         st.markdown(
-            f"### ✅ Suggested Side: **{suggested_side}**  ·  "
-            f"True EV %: **{suggested_ev:.2f}%**  ·  "
-            f"True Prob: **{suggested_prob:.2f}%**  ·  "
-            f"Implied: **{suggested_imp:.2f}%**"
+            f"### ✅ Suggested Side: **{kr['suggested_side']}**  ·  "
+            f"True EV %: **{kr['suggested_ev']:.2f}%**  ·  "
+            f"True Prob: **{kr['suggested_prob']:.2f}%**  ·  "
+            f"Implied: **{kr['suggested_imp']:.2f}%**"
         )
 
         cL, cR = st.columns(2)
         with cL:
             st.markdown("#### Over")
-            st.write(f"**True Over %:** {p_over*100:.2f}%")
-            st.write(f"**Implied Over %:** {imp_over*100:.2f}%")
-            st.write(f"**Expected Value (EV%):** {ev_over:.2f}%")
-            st.write(f"**True EV % (ROI per $1):** {true_ev_over_pct:.2f}%")
-            st.write(f"**Tier:** {over_tier}")
+            st.write(f"**True Over %:** {kr['p_over']*100:.2f}%")
+            st.write(f"**Implied Over %:** {kr['imp_over']*100:.2f}%")
+            st.write(f"**Expected Value (EV%):** {kr['ev_over']:.2f}%")
+            st.write(f"**True EV % (ROI per $1):** {kr['true_ev_over_pct']:.2f}%")
+            st.write(f"**Tier:** {kr['over_tier']}")
             if st.button("➕ Add to Parlay: Over K", key="add_k_over"):
-                add_leg_to_parlay("K", f"{k_pitcher or 'Pitcher'} O{k_line} K", "Over", f"{k_line}", float(odds_over_f), float(p_over))
+                add_leg_to_parlay("K", f"{kr['pitcher']} O{kr['k_line']} K", "Over", f"{kr['k_line']}", kr["odds_over"], kr["p_over"])
                 st.success("Added to Parlay.")
         with cR:
             st.markdown("#### Under")
-            st.write(f"**True Under %:** {p_under*100:.2f}%")
-            st.write(f"**Implied Under %:** {imp_under*100:.2f}%")
-            st.write(f"**Expected Value (EV%):** {ev_under:.2f}%")
-            st.write(f"**True EV % (ROI per $1):** {true_ev_under_pct:.2f}%")
-            st.write(f"**Tier:** {under_tier}")
+            st.write(f"**True Under %:** {kr['p_under']*100:.2f}%")
+            st.write(f"**Implied Under %:** {kr['imp_under']*100:.2f}%")
+            st.write(f"**Expected Value (EV%):** {kr['ev_under']:.2f}%")
+            st.write(f"**True EV % (ROI per $1):** {kr['true_ev_under_pct']:.2f}%")
+            st.write(f"**Tier:** {kr['under_tier']}")
             if st.button("➕ Add to Parlay: Under K", key="add_k_under"):
-                add_leg_to_parlay("K", f"{k_pitcher or 'Pitcher'} U{k_line} K", "Under", f"{k_line}", float(odds_under_f), float(p_under))
+                add_leg_to_parlay("K", f"{kr['pitcher']} U{kr['k_line']} K", "Under", f"{kr['k_line']}", kr["odds_under"], kr["p_under"])
                 st.success("Added to Parlay.")
 
 # =========================================================
