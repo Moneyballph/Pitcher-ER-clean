@@ -9,7 +9,6 @@ import pandas as pd
 # =========================================================
 st.set_page_config(page_title="Pitcher ER & K Simulator", layout="wide")
 
-# Background + logo
 st.markdown("""
     <style>
     .stApp {
@@ -26,6 +25,8 @@ st.markdown('<div id="logo"><img src="images/logo.png" width="160"></div>', unsa
 # Session state
 if "parlay_legs" not in st.session_state:
     st.session_state.parlay_legs = []
+if "player_board" not in st.session_state:
+    st.session_state.player_board = []   # saved legs to pick later
 if "er_result" not in st.session_state:
     st.session_state.er_result = None
 if "k_result" not in st.session_state:
@@ -50,7 +51,6 @@ def decimal_to_american(dec: float) -> int:
     return -round(100.0 / (dec - 1.0))
 
 def parse_american_input(txt: str):
-    """Parse '+135', '135', '-105' to float; return None if blank."""
     if txt is None: return None
     s = str(txt).strip()
     if s == "": return None
@@ -77,14 +77,11 @@ def expected_bf(expected_ip, pa_per_inning=PA_PER_INNING):
     return max(1, int(round(expected_ip * pa_per_inning)))
 
 def estimate_pK(pitcher_K_rate, opp_K_rate_vs_hand, park_factor=1.0, ump_factor=1.0, recent_factor=1.0):
-    # Inputs decimals (e.g., 0.27 = 27%)
     base = 0.6*pitcher_K_rate + 0.4*opp_K_rate_vs_hand
     adj = base * park_factor * ump_factor * recent_factor
     return clamp(adj, 0.10, 0.45)
 
 def k_over_under_probs(line_ks, n_bf, pK):
-    # integer L.0 => Under=P(K<=L-1), Over=P(K>=L)
-    # half L.5 => Under=P(K<=floor(L)), Over=P(K>=floor(L)+1)
     if abs(line_ks - round(line_ks)) < 1e-9:
         k_under = int(line_ks) - 1
         k_over  = int(line_ks)
@@ -101,7 +98,6 @@ def leg_true_ev_pct(odds_american: float, true_prob: float) -> float:
     return (true_prob * payout - (1 - true_prob)) * 100.0
 
 def parlay_tier(true_ev_pct: float, legs: list) -> str:
-    # Tier on parlay True EV %, but require all legs to be +EV for Elite/Strong
     all_pos = all(leg_true_ev_pct(leg["Odds"], leg["True Prob"]) > 0 for leg in legs)
     if true_ev_pct >= 10.0 and all_pos: return "🟢 Elite"
     if true_ev_pct >= 5.0  and all_pos: return "🟡 Strong"
@@ -109,7 +105,7 @@ def parlay_tier(true_ev_pct: float, legs: list) -> str:
     return "🔴 Risky"
 
 # =========================================================
-#                   PARLAY BUILDER LOGIC
+#             BOARD + PARLAY (save / add / remove)
 # =========================================================
 def add_leg_to_parlay(market:str, desc:str, side:str, line:str, odds:float, true_prob:float):
     st.session_state.parlay_legs.append({
@@ -121,40 +117,49 @@ def add_leg_to_parlay(market:str, desc:str, side:str, line:str, odds:float, true
         "True Prob": float(true_prob)
     })
 
-def parlay_summary(legs, override_american_odds: float | None = None):
-    """Return both the model (no-corr) price and the 'used' price (book override if provided)."""
-    if not legs: return None
+def save_leg_to_board(market:str, desc:str, side:str, line:str, odds:float, true_prob:float):
+    # prevent exact-duplicate rows
+    sig = (market, desc, side, line, int(odds), round(true_prob,4))
+    if not any((b.get("sig") == sig) for b in st.session_state.player_board):
+        st.session_state.player_board.append({
+            "sig": sig,
+            "Market": market,
+            "Description": desc,
+            "Side": side,
+            "Line": line,
+            "Odds": float(odds),
+            "True Prob": float(true_prob)
+        })
 
-    # Model (no-correlation) price
+def remove_parlay_row(idx: int):
+    if 0 <= idx < len(st.session_state.parlay_legs):
+        st.session_state.parlay_legs.pop(idx)
+
+def parlay_summary(legs, override_american_odds: float | None = None):
+    if not legs: return None
+    # model odds
     dec_model = 1.0
     for leg in legs:
         dec_model *= american_to_decimal(leg["Odds"])
     amer_model = decimal_to_american(dec_model)
-
-    # Which odds to USE for implied %, EV, tier, tracker row
+    # used odds
     if override_american_odds is not None:
         amer_used = float(override_american_odds)
         dec_used  = american_to_decimal(amer_used)
     else:
         amer_used = amer_model
         dec_used  = dec_model
-
-    # True parlay probability (model independence)
+    # true prob (independent)
     true_p = 1.0
     for leg in legs:
         true_p *= leg["True Prob"]
-
-    # Implied, edge, EV using the USED odds
     imp_p_used = american_to_prob(amer_used)
     edge_pp_used = (true_p - imp_p_used) * 100.0
     payout_used = dec_used - 1.0
     true_ev_pct_used = ((true_p * payout_used) - (1 - true_p)) * 100.0
-
-    # Optional: how far the book deviates from model price
     sgp_gap_pct = None
     if override_american_odds is not None:
-        sgp_gap_pct = (dec_model - dec_used) / dec_model * 100.0  # positive => book is worse for you
-
+        sgp_gap_pct = (dec_model - dec_used) / dec_model * 100.0
     return {
         "American Odds (model)": amer_model,
         "Decimal Odds (model)": dec_model,
@@ -200,7 +205,6 @@ with tabs[0]:
         ballpark = st.selectbox("Ballpark Factor", ["Neutral", "Pitcher-Friendly", "Hitter-Friendly"])
         under_odds = st.number_input("Sportsbook Odds (U2.5 ER)", value=-115)
         if st.button("▶ Simulate Player", key="simulate_er"):
-            # compute & SAVE to state
             try:
                 ip_values = [float(i.strip()) for i in last_3_ip.split(",") if i.strip() != ""]
                 trend_ip = sum(ip_values) / len(ip_values)
@@ -248,7 +252,7 @@ with tabs[0]:
                 "odds": float(under_odds)
             }
 
-    # ----- Always show the latest ER results (if any) -----
+    # ----- Show latest ER results (if any) -----
     er = st.session_state.er_result
     if er:
         st.subheader("📊 Simulation Results")
@@ -262,20 +266,16 @@ with tabs[0]:
         st.markdown(f"**Difficulty Tier:** {er['tier']}")
         if er["warning"]: st.warning(er["warning"])
 
-        st.subheader("🧾 Player Board")
-        df = pd.DataFrame({
-            "Pitcher": [er["pitcher"]],
-            "True Probability": [f"{er['true_prob']*100:.1f}%"],
-            "Implied Probability": [f"{er['implied_prob']*100:.1f}%"],
-            "EV %": [f"{er['ev']:.1f}%"],
-            "True EV %": [f"{er['true_ev_percent']:.1f}%"],
-            "Tier": [er["tier"].split()[-1]]
-        })
-        st.dataframe(df, use_container_width=True)
-
-        if st.button("➕ Add to Parlay: Under 2.5 ER", key="add_er"):
-            add_leg_to_parlay("ER", f"{er['pitcher']} U2.5 ER", "Under", "2.5", er["odds"], er["true_prob"])
-            st.success("Added to Parlay.")
+        st.subheader("🧾 Player Board Actions")
+        cA, cB = st.columns(2)
+        with cA:
+            if st.button("💾 Save to Board: Under 2.5 ER"):
+                save_leg_to_board("ER", f"{er['pitcher']} U2.5 ER", "Under", "2.5", er["odds"], er["true_prob"])
+                st.success("Saved to Player Board.")
+        with cB:
+            if st.button("➕ Add to Parlay: Under 2.5 ER", key="add_er"):
+                add_leg_to_parlay("ER", f"{er['pitcher']} U2.5 ER", "Under", "2.5", er["odds"], er["true_prob"])
+                st.success("Added to Parlay.")
 
 # =========================================================
 #        TAB 2: STRIKEOUTS (persist results + EV + pick)
@@ -302,7 +302,6 @@ with tabs[1]:
             recent_factor= st.number_input("Recent Form Factor", value=1.00, min_value=0.90, max_value=1.10, step=0.01, format="%.2f")
 
     if st.button("▶ Calculate Strikeouts"):
-        # compute & SAVE to state
         try:
             ip_values_k = [float(i.strip()) for i in last_3_ip_k.split(",") if i.strip() != ""]
             trend_ip_k = sum(ip_values_k) / len(ip_values_k)
@@ -344,15 +343,11 @@ with tabs[1]:
         under_tier = tier_from_true_prob(p_under)
 
         if true_ev_over_pct > true_ev_under_pct:
-            suggested_side = "Over"
-            suggested_ev = true_ev_over_pct
-            suggested_prob = p_over * 100.0
-            suggested_imp = imp_over * 100.0
+            suggested_side = "Over"; suggested_ev = true_ev_over_pct
+            suggested_prob = p_over * 100.0; suggested_imp = imp_over * 100.0
         else:
-            suggested_side = "Under"
-            suggested_ev = true_ev_under_pct
-            suggested_prob = p_under * 100.0
-            suggested_imp = imp_under * 100.0
+            suggested_side = "Under"; suggested_ev = true_ev_under_pct
+            suggested_prob = p_under * 100.0; suggested_imp = imp_under * 100.0
 
         st.session_state.k_result = {
             "pitcher": k_pitcher or "Pitcher",
@@ -371,13 +366,13 @@ with tabs[1]:
             "suggested_prob": suggested_prob, "suggested_imp": suggested_imp
         }
 
-    # ----- Always show latest K results (if any) -----
+    # ----- Show latest K results (if any) -----
     kr = st.session_state.k_result
     if kr:
         st.markdown("---")
         st.markdown(f"### {kr['pitcher']} — K Line {kr['k_line']}")
-        st.write(f"**Expected IP (auto):** {kr['expected_ip']} innings (avg of season GS-IP and last 3 starts)")
-        st.write(f"**Estimated Batters Faced (BF):** {kr['n_bf']}  (using PA/IP = {PA_PER_INNING})")
+        st.write(f"**Expected IP (auto):** {kr['expected_ip']} innings")
+        st.write(f"**Estimated Batters Faced (BF):** {kr['n_bf']}  (PA/IP = {PA_PER_INNING})")
         st.write(f"**Per-PA Strikeout Probability (pK):** {kr['pK']:.3f}")
         st.write(f"**Expected Strikeouts (mean Ks):** {kr['expected_ks']:.2f}")
 
@@ -394,60 +389,93 @@ with tabs[1]:
             st.markdown("#### Over")
             st.write(f"**True Over %:** {kr['p_over']*100:.2f}%")
             st.write(f"**Implied Over %:** {kr['imp_over']*100:.2f}%")
-            st.write(f"**Expected Value (EV%):** {kr['ev_over']:.2f}%")
+            st.write(f"**EV%:** {kr['ev_over']:.2f}%")
             st.write(f"**True EV % (ROI per $1):** {kr['true_ev_over_pct']:.2f}%")
             st.write(f"**Tier:** {kr['over_tier']}")
-            if st.button("➕ Add to Parlay: Over K", key="add_k_over"):
-                add_leg_to_parlay("K", f"{kr['pitcher']} O{kr['k_line']} K", "Over", f"{kr['k_line']}", kr["odds_over"], kr["p_over"])
-                st.success("Added to Parlay.")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("💾 Save to Board: Over K"):
+                    save_leg_to_board("K", f"{kr['pitcher']} O{kr['k_line']} K", "Over", f"{kr['k_line']}", kr["odds_over"], kr["p_over"])
+                    st.success("Saved to Player Board.")
+            with c2:
+                if st.button("➕ Add to Parlay: Over K", key="add_k_over"):
+                    add_leg_to_parlay("K", f"{kr['pitcher']} O{kr['k_line']} K", "Over", f"{kr['k_line']}", kr["odds_over"], kr["p_over"])
+                    st.success("Added to Parlay.")
         with cR:
             st.markdown("#### Under")
             st.write(f"**True Under %:** {kr['p_under']*100:.2f}%")
             st.write(f"**Implied Under %:** {kr['imp_under']*100:.2f}%")
-            st.write(f"**Expected Value (EV%):** {kr['ev_under']:.2f}%")
+            st.write(f"**EV%:** {kr['ev_under']:.2f}%")
             st.write(f"**True EV % (ROI per $1):** {kr['true_ev_under_pct']:.2f}%")
             st.write(f"**Tier:** {kr['under_tier']}")
-            if st.button("➕ Add to Parlay: Under K", key="add_k_under"):
-                add_leg_to_parlay("K", f"{kr['pitcher']} U{kr['k_line']} K", "Under", f"{kr['k_line']}", kr["odds_under"], kr["p_under"])
-                st.success("Added to Parlay.")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("💾 Save to Board: Under K"):
+                    save_leg_to_board("K", f"{kr['pitcher']} U{kr['k_line']} K", "Under", f"{kr['k_line']}", kr["odds_under"], kr["p_under"])
+                    st.success("Saved to Player Board.")
+            with c2:
+                if st.button("➕ Add to Parlay: Under K", key="add_k_under"):
+                    add_leg_to_parlay("K", f"{kr['pitcher']} U{kr['k_line']} K", "Under", f"{kr['k_line']}", kr["odds_under"], kr["p_under"])
+                    st.success("Added to Parlay.")
 
 # =========================================================
-#               TAB 3: PARLAY BUILDER (with override)
+#               TAB 3: PARLAY BUILDER + PLAYER BOARD
 # =========================================================
 with tabs[2]:
+    st.subheader("🗂 Player Board (saved legs)")
+    if st.session_state.player_board:
+        board_df = pd.DataFrame([
+            {
+                "Market": b["Market"],
+                "Description": b["Description"],
+                "Side": b["Side"],
+                "Line": b["Line"],
+                "Odds": int(b["Odds"]),
+                "True %": f"{b['True Prob']*100:.2f}%"
+            } for b in st.session_state.player_board
+        ])
+        st.dataframe(board_df, use_container_width=True, hide_index=True)
+        labels = [f"{i+1}. {b['Description']}  |  {int(b['Odds'])}  |  True {b['True Prob']*100:.1f}%"
+                  for i,b in enumerate(st.session_state.player_board)]
+        picks = st.multiselect("Select legs to add to parlay:", labels, key="board_select")
+        if st.button("➕ Add Selected to Parlay"):
+            for label in picks:
+                idx = int(label.split(".")[0]) - 1
+                b = st.session_state.player_board[idx]
+                add_leg_to_parlay(b["Market"], b["Description"], b["Side"], b["Line"], b["Odds"], b["True Prob"])
+            st.success(f"Added {len(picks)} leg(s) to parlay.")
+    else:
+        st.info("No saved legs yet. Use **Save to Board** on the ER/K tabs after simulating a player.")
+
+    st.markdown("---")
     st.subheader("🧩 Parlay Builder")
-    st.caption("Add legs from the Earned Runs or Strikeouts tabs. If your sportsbook shows different parlay odds (SGP pricing), enter them below.")
+
+    # show current parlay legs with remove buttons
+    if st.session_state.parlay_legs:
+        for i, leg in enumerate(st.session_state.parlay_legs):
+            c1, c2, c3, c4 = st.columns([6,2,2,1])
+            with c1: st.write(f"{i+1}. {leg['Description']}")
+            with c2: st.write(f"Odds: {int(leg['Odds'])}")
+            with c3: st.write(f"True: {leg['True Prob']*100:.2f}%")
+            with c4:
+                if st.button("🗑️", key=f"rm_{i}"):
+                    remove_parlay_row(i)
+                    st.experimental_rerun()
+    else:
+        st.info("No legs in parlay yet. Add from Player Board or ER/K tabs.")
 
     colA, colB = st.columns([3,1])
-    with colA:
-        if st.session_state.parlay_legs:
-            df_parlay = pd.DataFrame([
-                {
-                    "Market": leg["Market"],
-                    "Description": leg["Description"],
-                    "Side": leg["Side"],
-                    "Line": leg["Line"],
-                    "Odds": int(leg["Odds"]),
-                    "True %": f"{leg['True Prob']*100:.2f}%"
-                } for leg in st.session_state.parlay_legs
-            ])
-            st.dataframe(df_parlay, use_container_width=True, hide_index=True)
-        else:
-            st.info("No legs added yet. Use the buttons in the ER/K tabs to add legs.")
-
     with colB:
         if st.button("🧹 Clear Parlay"):
             st.session_state.parlay_legs = []
             st.success("Parlay cleared.")
 
-    # --- New: override book parlay odds ---
     book_odds_txt = st.text_input("Book Parlay Odds (American, optional)", value="")
     override_amer = parse_american_input(book_odds_txt)
 
     if st.session_state.parlay_legs:
         summary = parlay_summary(st.session_state.parlay_legs, override_amer)
         if summary:
-            # Tier uses the USED odds EV
             tier = parlay_tier(summary["True EV % (used)"], st.session_state.parlay_legs)
 
             st.markdown("---")
@@ -480,4 +508,5 @@ with tabs[2]:
                 f"{tier}"
             )
             st.code(tracker_row, language="text")
+
 
