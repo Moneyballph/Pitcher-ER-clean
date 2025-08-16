@@ -49,6 +49,16 @@ def decimal_to_american(dec: float) -> int:
     if dec >= 2.0: return round((dec - 1.0) * 100)
     return -round(100.0 / (dec - 1.0))
 
+def parse_american_input(txt: str):
+    """Parse '+135', '135', '-105' to float; return None if blank."""
+    if txt is None: return None
+    s = str(txt).strip()
+    if s == "": return None
+    try:
+        return float(s.replace("+",""))
+    except Exception:
+        return None
+
 def clamp(x, lo, hi): return max(lo, min(hi, x))
 
 # ---------- Binomial utilities for Strikeouts ----------
@@ -111,28 +121,50 @@ def add_leg_to_parlay(market:str, desc:str, side:str, line:str, odds:float, true
         "True Prob": float(true_prob)
     })
 
-def parlay_summary(legs):
-    """Independent combination—no correlation adjustment."""
+def parlay_summary(legs, override_american_odds: float | None = None):
+    """Return both the model (no-corr) price and the 'used' price (book override if provided)."""
     if not legs: return None
-    dec = 1.0
+
+    # Model (no-correlation) price
+    dec_model = 1.0
     for leg in legs:
-        dec *= american_to_decimal(leg["Odds"])
-    amer = decimal_to_american(dec)
+        dec_model *= american_to_decimal(leg["Odds"])
+    amer_model = decimal_to_american(dec_model)
+
+    # Which odds to USE for implied %, EV, tier, tracker row
+    if override_american_odds is not None:
+        amer_used = float(override_american_odds)
+        dec_used  = american_to_decimal(amer_used)
+    else:
+        amer_used = amer_model
+        dec_used  = dec_model
+
+    # True parlay probability (model independence)
     true_p = 1.0
     for leg in legs:
         true_p *= leg["True Prob"]
-    imp_p = american_to_prob(amer)
-    edge_pp = (true_p - imp_p) * 100.0
-    payout = dec - 1.0
-    true_ev = (true_p * payout) - (1 - true_p) * 1.0
-    true_ev_pct = true_ev * 100.0
+
+    # Implied, edge, EV using the USED odds
+    imp_p_used = american_to_prob(amer_used)
+    edge_pp_used = (true_p - imp_p_used) * 100.0
+    payout_used = dec_used - 1.0
+    true_ev_pct_used = ((true_p * payout_used) - (1 - true_p)) * 100.0
+
+    # Optional: how far the book deviates from model price
+    sgp_gap_pct = None
+    if override_american_odds is not None:
+        sgp_gap_pct = (dec_model - dec_used) / dec_model * 100.0  # positive => book is worse for you
+
     return {
-        "Decimal Odds": dec,
-        "American Odds": amer,
+        "American Odds (model)": amer_model,
+        "Decimal Odds (model)": dec_model,
+        "American Odds (used)": amer_used,
+        "Decimal Odds (used)": dec_used,
         "True %": true_p * 100.0,
-        "Implied %": imp_p * 100.0,
-        "Edge (pp)": edge_pp,
-        "True EV %": true_ev_pct
+        "Implied % (used)": imp_p_used * 100.0,
+        "Edge (pp, used)": edge_pp_used,
+        "True EV % (used)": true_ev_pct_used,
+        "SGP Adjustment vs Model %": sgp_gap_pct
     }
 
 def tier_from_true_prob(p: float) -> str:
@@ -380,11 +412,11 @@ with tabs[1]:
                 st.success("Added to Parlay.")
 
 # =========================================================
-#               TAB 3: PARLAY BUILDER (with Tier)
+#               TAB 3: PARLAY BUILDER (with override)
 # =========================================================
 with tabs[2]:
     st.subheader("🧩 Parlay Builder")
-    st.caption("Add legs from the Earned Runs or Strikeouts tabs, then review the combined edge and EV.")
+    st.caption("Add legs from the Earned Runs or Strikeouts tabs. If your sportsbook shows different parlay odds (SGP pricing), enter them below.")
 
     colA, colB = st.columns([3,1])
     with colA:
@@ -408,23 +440,44 @@ with tabs[2]:
             st.session_state.parlay_legs = []
             st.success("Parlay cleared.")
 
+    # --- New: override book parlay odds ---
+    book_odds_txt = st.text_input("Book Parlay Odds (American, optional)", value="")
+    override_amer = parse_american_input(book_odds_txt)
+
     if st.session_state.parlay_legs:
-        summary = parlay_summary(st.session_state.parlay_legs)
+        summary = parlay_summary(st.session_state.parlay_legs, override_amer)
         if summary:
-            tier = parlay_tier(summary["True EV %"], st.session_state.parlay_legs)
+            # Tier uses the USED odds EV
+            tier = parlay_tier(summary["True EV % (used)"], st.session_state.parlay_legs)
 
             st.markdown("---")
             st.markdown("### 📈 Parlay Summary")
-            st.write(f"**Combined American Odds:** {summary['American Odds']}")
-            st.write(f"**Combined Decimal Odds:** {summary['Decimal Odds']:.3f}")
+            st.write(f"**Combined American Odds (model, no corr):** {summary['American Odds (model)']}")
+            st.write(f"**Combined Decimal Odds (model):** {summary['Decimal Odds (model)']:.3f}")
+
+            if override_amer is not None:
+                st.write(f"**Book Parlay Odds (used):** {summary['American Odds (used)']}")
+                st.write(f"**Book Decimal Odds (used):** {summary['Decimal Odds (used)']:.3f}")
+                st.write(f"**SGP Adjustment vs Model:** {summary['SGP Adjustment vs Model %']:.2f}%")
+            else:
+                st.write(f"**(Using model odds — no book override entered)**")
+
             st.write(f"**True Parlay %:** {summary['True %']:.2f}%")
-            st.write(f"**Implied Parlay %:** {summary['Implied %']:.2f}%")
-            st.write(f"**Edge (pp):** {summary['Edge (pp)']:.2f}")
-            st.write(f"**True EV % (ROI per $1):** {summary['True EV %']:.2f}%")
+            st.write(f"**Implied Parlay % (used):** {summary['Implied % (used)']:.2f}%")
+            st.write(f"**Edge (pp, used):** {summary['Edge (pp, used)']:.2f}")
+            st.write(f"**True EV % (ROI per $1, used):** {summary['True EV % (used)']:.2f}%")
             st.write(f"**Parlay Tier:** {tier}")
 
             st.markdown("#### Copy-ready Tracker Row")
             legs_text = " + ".join([leg["Description"] for leg in st.session_state.parlay_legs])
-            tracker_row = f"{legs_text}\t{summary['American Odds']}\t{summary['True %']:.2f}%\t{summary['Implied %']:.2f}%\t{summary['Edge (pp)']:.2f}\t{summary['True EV %']:.2f}%\t{tier}"
+            tracker_row = (
+                f"{legs_text}\t"
+                f"{int(summary['American Odds (used)'])}\t"
+                f"{summary['True %']:.2f}%\t"
+                f"{summary['Implied % (used)']:.2f}%\t"
+                f"{summary['Edge (pp, used)']:.2f}\t"
+                f"{summary['True EV % (used)']:.2f}%\t"
+                f"{tier}"
+            )
             st.code(tracker_row, language="text")
 
